@@ -1,6 +1,7 @@
 # Custom
 **data/
 **output/
+**events.out.tfevents.*
 
 
 # Byte-compiled / optimized / DLL files
@@ -132,3 +133,4 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
