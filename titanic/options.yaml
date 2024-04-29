@@ -1,0 +1,63 @@
+seed: 0
+source: "data/titanic.csv"
+savepath: "output/"
+device: "cuda"
+test_size: 0.2
+
+columns:
+  - "Pclass"
+  - "Age"
+  - "SibSp"
+  - "Parch"
+  - "Fare"
+  - "Sex"
+  - "Embarked"
+
+batch_size: 16
+epochs: 100
+lr: 0.01
+momentum: 0.5
+
+val_freq: 10
+ckpt_freq: 10
+
+archs:
+  b1:
+    #in_dim is variable
+    hidden_dims: [3]
+    out_dim: 1
+    dropout: 0
+
+  b2:
+    #in_dim is variable
+    hidden_dims: [3]
+    out_dim: 1
+    dropout: 0.8
+
+
+  b3:
+    #in_dim is variable
+    hidden_dims: [3, 6, 12, 6, 3]
+    out_dim: 1
+    dropout: 0
+
+  b4:
+    #in_dim is variable
+    hidden_dims: [20,40,80,40,20]
+    out_dim: 1
+    dropout: 0
+
+  b5:
+    #in_dim is variable
+    hidden_dims: [20,40,80,40,20]
+    out_dim: 1
+    dropout: 0.5
+    
+  b6:
+    #in_dim is variable
+    hidden_dims: [20,40,80,120,160]
+    out_dim: 1
+    dropout: 0
+
+
+
