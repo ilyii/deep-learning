@@ -62,7 +62,6 @@ def main(opt):
 
     # Model
     archs = opt.archs
-    print(archs)
     models = [NN(in_dim=dataset_train.X.shape[1], **arch) for k, arch in archs.items()]
 
     # Training
@@ -71,7 +70,7 @@ def main(opt):
         model = model.to(opt.device)
         optimizer = optim.SGD(model.parameters(), lr=opt.lr, momentum=opt.momentum)
         criterion = nn.BCELoss()
-        stats[archs.keys()[idx]] = train(model=model,
+        stats[list(archs.keys())[idx]] = train(model=model,
                                          dataloader_train=dataloader_train,
                                          dataloader_test=dataloader_test,
                                          optimizer=optimizer,

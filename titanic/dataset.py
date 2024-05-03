@@ -26,15 +26,13 @@ class TitanicDataset(Dataset):
     def __getitem__(self, idx):
         features = self.X[idx]
         label = self.y[idx]
-        return torch.tensor(features), torch.tensor(label)
+        return torch.tensor(features, dtype=torch.float32), torch.tensor(label, dtype=torch.float32).unsqueeze(0)
 
     def _preprocess(self, data_path, columns, test_size, seed):
         columns = list(set(columns + ["Survived"]))
         data = pd.read_csv(data_path)
         data = data[columns]
         data_train, data_test = train_test_split(data, test_size=test_size, random_state=seed)
-        data_train.reset_index(drop=True, inplace=True)
-        data_test.reset_index(drop=True, inplace=True)
 
         data_train = self._impute(data_train, "train")
         data_test = self._impute(data_test, "test")
@@ -42,8 +40,12 @@ class TitanicDataset(Dataset):
         data_train = pd.get_dummies(data_train)
         data_test = pd.get_dummies(data_test)
 
+        data_train.reset_index(drop=True, inplace=True)
+        data_test.reset_index(drop=True, inplace=True)
+        
         x_train, y_train = data_train.drop(columns=["Survived"]), data_train["Survived"]
         x_test, y_test = data_test.drop(columns=["Survived"]), data_test["Survived"]
+        print(y_test)
 
         scaler = MinMaxScaler()
         x_train = scaler.fit_transform(x_train)
