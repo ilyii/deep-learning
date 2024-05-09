@@ -1,0 +1,23 @@
+datapath: data/
+
+device: "cpu"
+seed: 0
+
+vocab_size: 5000
+
+train:
+  epochs: 10
+  batch_size: 64
+  lr: 0.001
+  dropout: 0
+
+
+lstm:
+  embed_dim: 128
+  hidden_dim: 256
+  num_layer: 1
+
+gru:
+  embed_dim: 128
+  hidden_dim: 256
+  num_layer: 1
