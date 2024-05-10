@@ -1,178 +1,281 @@
-
-
+import copy
 import os
+import random
+import time
+from collections import Counter, defaultdict
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import spacy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-# from transformers import AutoTokenizer
-from torch.utils.data import Dataset, DataLoader
-import spacy
+from torch.utils.data import DataLoader
+from tqdm.notebook import tqdm
 
-torch.manual_seed(1)
+import util
 
-# ------------------------------
-#           RNN
-# ------------------------------
+UNK = "<UNK>"
+PAD = "<PAD>"
 
-class RNN(nn.Module):
-    def __init__(self, input_size, hidden_size, num_layers, output_size):
-        super(RNN, self).__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        self.rnn = nn.RNN(input_size, hidden_size, num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_size, output_size)
+def load_data(path:os.PathLike, split:str):
+    """
+    Loading the data. Assuming the data is stored in the following format:
+    
+    path/
+        {split}_text.txt
+        {split}_labels.txt
+
+    Args:
+        path: Path to the data directory.
+        split: The split to load [train, val, test].
+    """
+    res = []
+    with open(os.path.join(path, f'{split}_text.txt'), encoding="utf-8") as text_file, \
+         open(os.path.join(path, f'{split}_labels.txt'), encoding="utf-8") as label_file:
+        for t, l in zip(text_file, label_file):
+            res.append({
+                "text": t,
+                "label": int(l.strip())
+            })
+
+    return res
+
+
+def load_yaml(path:os.PathLike):
+    import yaml
+    with open(path, 'r') as stream:
+        try:
+            return yaml.safe_load(stream)
+        except yaml.YAMLError as exc:
+            print(exc)
+            return None
+
+
+def clean_data(data, nlp):
+    processed_data = []
+    for example in data:
+        doc = nlp(example["text"].strip())
+        cleaned_tokens = [token.lemma_ for token in doc if not token.is_stop and not token.is_punct]
+        example["tokens"] = cleaned_tokens
+        processed_data.append(example)
+    return processed_data
+
+
+def process_data(data, nlp, clean=True):
+    if clean:
+        return clean_data(data, nlp)
+    else:
+        processed_data = []
+        for example in data:
+            doc = nlp(example["text"].strip())
+            tokens = [token.text for token in doc]
+            example["tokens"] = tokens
+            processed_data.append(example)
+        return processed_data
+
+
+def build_vocab(data, min_freq=1, limit=None):
+    counter = Counter()
+    for example in data:
+        counter.update(example["tokens"])
+    vocab = {word: idx for idx, (word, freq) in enumerate(counter.items(), 2) if freq >= min_freq}
+    if limit and limit < len(vocab):
+        vocab = {word: idx for idx, (word, freq) in enumerate(counter.most_common(limit))}
+        vocab[UNK] = len(vocab)
+        vocab[PAD] = len(vocab)
+    return vocab
+
+        
+class LSTM(nn.Module):
+    def __init__(self, embed_dim, hidden_dim, num_layers, vocab_size, out_dim, pad_idx):
+        super(LSTM,self).__init__()
+        self.hidden_dim = hidden_dim
+        self.embed = nn.Embedding(vocab_size, embed_dim, padding_idx=pad_idx)
+        self.lstm = nn.LSTM(embed_dim, hidden_dim, num_layers=num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_dim, out_dim)
 
     def forward(self, x):
-        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)  # Initial hidden state
-        out, _ = self.rnn(x, h0)
-        out = self.fc(out[:, -1, :])  # Use only the last output of the sequence
-        return out
-
-
-# ------------------------------
-#           LSTM
-# ------------------------------
-class LSTM(nn.Module):
-    def __init__(self, input_size, hidden_size, vocab_size, output_size):
-        super(LSTM, self).__init__()
-        self.hidden_size = hidden_size
-        self.lstm = nn.LSTM(input_size, hidden_size)
-        self.embedding = nn.Embedding(vocab_size, input_size)
-        self.fc = nn.Linear(hidden_size, output_size)
+        embeds = self.embed(x)
+        lstm_out, (hidden, cell) = self.lstm(embeds)
+        output = self.fc(hidden[-1])
+        return output.unsqueeze(0)
     
-    def forward(self, inputs):
-        inputs = self.embedding(inputs)
-        out, (hn, cn) = self.lstm(inputs)
-        out = self.fc(out[:, -1, :])
-        return out
-
-
-# ------------------------------
-#           GRU
-# ------------------------------
 
 class GRU(nn.Module):
-    def __init__(self, input_size, hidden_size, vocab_size, output_size):
-        super(GRU, self).__init__()
-        self.hidden_size = hidden_size
-        self.gru = nn.GRU(input_size, hidden_size)
-        self.embedding = nn.Embedding(vocab_size, input_size)
-        self.fc = nn.Linear(hidden_size, output_size)
+    def __init__(self, embed_dim, hidden_dim, num_layers, vocab_size, out_dim, pad_idx):
+        super(GRU,self).__init__()
+        self.hidden_dim = hidden_dim
+        self.embed = nn.Embedding(vocab_size, embed_dim, padding_idx=pad_idx)
+        self.gru = nn.GRU(embed_dim, hidden_dim, num_layers=num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_dim, out_dim)
 
-    def forward(self, inputs):
-        inputs = self.embedding(inputs)
-        out, hn = self.gru(inputs)
-        out = self.fc(out[:, -1, :])
-        return out
-
-
-class TweetDataset(Dataset):
-    def __init__(self, source, split):
-        self.tokenizer = spacy.load("en_core_web_sm") #python -m spacy download en_core_web_sm
-        self.label2class = {0: "anger", 1: "joy", 2: "optimism", 3: "sadness"}
-        self.text = self.preprocess(os.path.join(source, f"{split}_text.txt"))
-        self.text = [[token.text for token in self.tokenizer(text)] for text in self.text]
-        vocab = self.get_k_most_common(self.text, 5000)
-        self.text = self.reduce_vocab(self.text, vocab)
-        print(self.text)
-        
-        
-
-        self.labels = self.preprocess(os.path.join(source, f"{split}_labels.txt"))
-
-        assert len(self.text) == len(self.labels), f"Mismatch between text={len(self.text)} and labels={len(self.labels)} in length."
-        self.data = [(text, label) for text, label in zip(self.text, self.labels)]
-        
-
-
-    def __len__(self):
-        return len(self.data)
-    
-    def __getitem__(self, idx):
-        text, label = self.data[idx]
-        
-        return inputs, label
-    
-    def preprocess(self, text):
-        if os.path.exists(text):            
-            with open(text, "r", encoding="utf-8") as f:
-                text = f.read()
-        new_text = []
-        for t in text.split(" "):
-            t = '@user' if t.startswith('@') and len(t) > 1 else t
-            t = 'http' if t.startswith('http') else t
-            new_text.append(t)
-        
-        new_text = " ".join(new_text).split("\n")
-        return new_text
-    
-    def get_k_most_common(self, text, k):
-        vocab = {}
-        for part in text:
-            for word in part:
-                if word in vocab:
-                    vocab[word] += 1
-                else:
-                    vocab[word] = 1
-        vocab = [elem[0] for elem in sorted(vocab.items(), key=lambda x: x[1], reverse=True)]
-        return vocab[:k]
-    
-    def reduce_vocab(self, text, vocab):
-        new_text = []
-        for part in text:
-            for i, word in enumerate(part):
-                if word not in vocab:
-                    part[i] = "<UNK>"
-            new_text.append(part)
-        return new_text
-
-        
-
-
-    
+    def forward(self, x):
+        embeds = self.embed(x)
+        gru_out, hidden = self.gru(embeds)
+        output = self.fc(hidden[-1])
+        return output.unsqueeze(0)
     
 
+def train_single_line(model=None,
+                      data=None,
+                      vocab=None,
+                      criterion=None,
+                      optimizer=None,
+                      epochs=0,
+                      device=None
+                    ):
+    s_time = time.time()
+    model.train()
+    stats = defaultdict(list)
+    for epoch in range(epochs):
+        epoch_loss = 0
+        with tqdm(total=len(data), desc=f"Epoch {epoch+1}/{epochs}") as pbar:
+            for i, (features, label) in data.items():
+                optimizer.zero_grad()
+                sentence_in = torch.tensor([vocab.get(word, vocab[UNK]) for word in features], dtype=torch.long)
+                targets = torch.tensor([label], dtype=torch.long)
+                sentence_in, targets = sentence_in.to(device), targets.to(device)
+                
+                output = model(sentence_in)
+                loss = criterion(output, targets)
+                loss.backward()
+                optimizer.step()
+                stats["loss"].append(loss.item())
+                epoch_loss += loss.item()
+
+                predicted = torch.argmax(output)
+                stats["correct"].append((predicted == targets).item())
+                stats["total"].append(1)
+            
+                pbar.update(1)
+
+
+            epoch_loss /= len(data)
+            accuracy = sum(stats["correct"]) / sum(stats["total"])
+            
+            pbar.set_postfix_str(f"Epoch {epoch+1}/{epochs} Loss: {epoch_loss:.4f} Accuracy: {accuracy:.4f}")
+
+            
+    
+    print(f"Done. ({time.time()-s_time:.2f}s)")
+    return stats
+
+
+def test_single_line(model=None,
+                     data=None,
+                     vocab=None,
+                     criterion=None,
+                     device=None
+                    ):
+    s_time = time.time()
+    model.eval()
+    stats = defaultdict(list)
+    with torch.no_grad():
+        for i, (features, label) in data.items():
+            sentence_in = torch.tensor([vocab.get(word, vocab[UNK]) for word in features], dtype=torch.long)
+            targets = torch.tensor([label], dtype=torch.long)            
+            sentence_in, targets = sentence_in.to(device), targets.to(device)
+            output = model(sentence_in)            
+            loss = criterion(output, targets)
+            stats["loss"].append(loss.item())
+
+            predicted = torch.argmax(output, dim=1)
+            stats["correct"].append((predicted == targets).item())
+            stats["total"].append(1)
+
+    loss = sum(stats["loss"]) / len(data)
+    accuracy = sum(stats["correct"]) / sum(stats["total"])
+    print(f"Test Loss: {loss:.4f} Accuracy: {accuracy:.4f}")
+    print(f"Done. ({time.time()-s_time:.2f}s)")
+    return stats
 
 
 
-# tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-embedding_dim = 128
-hidden_dim = 256
-source = "data/"
-train_dataset = TweetDataset(source, "train")
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+def main(opt):
+    util.set_seed(opt.seed)
+    # Data
+    datasets = {"train": load_data(opt.datapath, "train"),
+            "val": load_data(opt.datapath, "val"),
+            "test": load_data(opt.datapath, "test")}
+    
+    with open(os.path.join(opt.datapath, "mapping.txt")) as f:
+        id2label = {int(line.split()[0]): line.split()[1] for line in f}
 
-# lstm = LSTM(embedding_dim, hidden_dim)
-# rnn = RNN(embedding_dim, hidden_dim, 2, 4)
-
-
-print(train_dataset[0])
-# def train():
-#     model.train()
-
-#     train_stats = {
-#         "loss": 0,
-#         "accuracy": 0
-#     }
-#     for epoch in range(num_epochs):
-#         running_loss = 0.0
-#         correct = 0
-#         total = 0
-
-#         for i, (inputs, labels) in tqdm(enumerate(train_loader), total=len(train_loader)):
-#             inputs = inputs.to(device)
-#             labels = labels.to(device)
-
-#             optimizer.zero_grad()
-#             outputs = model(inputs)
-#             loss = criterion(outputs, labels)
-#             loss.backward()
-#             optimizer.step()
-
-#             running_loss += loss.item()
-#             _, predicted = torch.max(outputs.data, 1)
-#             total += labels.size(0)
-#             correct += (predicted == labels).sum().item()
+    # Spacy
+    nlp = spacy.load("en_core_web_sm")
+    datasets_raw = {split: process_data(data, nlp, clean=False) for split, data in datasets.items()}
+    datasets_optimized = {split: process_data(data, nlp, clean=True) for split, data in datasets.items()}
 
 
+    # Vocab
+    vocab = build_vocab(datasets_optimized["train"], limit=opt.vocab_size) # "word": "idx"
+    unk = vocab[UNK]
+    pad = vocab[PAD]
+
+    # Model
+    model = LSTM(opt.embed_dim, opt.hidden_dim, opt.num_layers, len(vocab), opt.out_dim, pad)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=opt.lr)
+    model.to(opt.device)
+
+    train_stats = defaultdict(dict)
+
+    # Train
+    train_stats["LSTM"]["raw"] = train_single_line(model=copy.deepcopy(model),
+                                                    data={i: (example["tokens"], example["label"]) for i, example in enumerate(datasets_raw["train"])},
+                                                    vocab=vocab,
+                                                    criterion=criterion,
+                                                    optimizer=optimizer,
+                                                    epochs=opt.epochs,
+                                                    device=opt.device
+                                                   )
+    
+    train_stats["LSTM"]["optimized"] = train_single_line(model=copy.deepcopy(model),
+                                                    data={i: (example["tokens"], example["label"]) for i, example in enumerate(datasets_optimized["train"])},
+                                                    vocab=vocab,
+                                                    criterion=criterion,
+                                                    optimizer=optimizer,
+                                                    epochs=opt.epochs,
+                                                    device=opt.device
+                                                   )
+    
+    # Test
+    test_stats = defaultdict(dict)
+    test_stats["LSTM"]["raw"] = test_single_line(model=copy.deepcopy(model),
+                                                data={i: (example["tokens"], example["label"]) for i, example in enumerate(datasets_raw["test"])},
+                                                vocab=vocab,
+                                                criterion=criterion,
+                                                device=opt.device
+                                               )
+    
+    test_stats["LSTM"]["optimized"] = test_single_line(model=copy.deepcopy(model),
+                                                data={i: (example["tokens"], example["label"]) for i, example in enumerate(datasets_optimized["test"])},
+                                                vocab=vocab,
+                                                criterion=criterion,
+                                                device=opt.device
+                                               )
+    
+    # Plot
+
+    fig, ax = plt.subplots(1, 2, figsize=(15, 5))
+    ax[0].plot(train_stats["LSTM"]["raw"]["loss"], label="Train Raw")
+    ax[0].plot(train_stats["LSTM"]["optimized"]["loss"], label="Train Optimized")
+    ax[0].set_title("Train Loss")
+    ax[0].legend()
+
+    ax[1].plot(test_stats["LSTM"]["raw"]["loss"], label="Test Raw")
+    ax[1].plot(test_stats["LSTM"]["optimized"]["loss"], label="Test Optimized")
+    ax[1].set_title("Test Loss")
+    ax[1].legend()
+    plt.show()
+    
+
+
+
+if __name__ == "__main__":
+    config = util.DotDict(load_yaml("config.yaml"))
+    
+    main(config)
