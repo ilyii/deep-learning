@@ -3,41 +3,9 @@ import random
 from matplotlib import pyplot as plt
 import numpy as np
 import seaborn as sns
-
 import torch
-import torchvision
-from torch.utils.data import DataLoader
 
-
-class DotDict(dict):
-    def __init__(self, *args, **kwargs):
-        super(DotDict, self).__init__(*args, **kwargs)
-        for key, value in self.items():
-            if isinstance(value, dict):
-                self[key] = DotDict(value)
-
-    def __getattr__(self, attr):
-        if attr in self:
-            return self[attr]
-        raise AttributeError(f"'DotDict' object has no attribute '{attr}'")
-
-    def __setattr__(self, key, value):
-        self[key] = value
-
-    def __delattr__(self, attr):
-        if attr in self:
-            del self[attr]
-        else:
-            raise AttributeError(f"'DotDict' object has no attribute '{attr}'")
-
-    def __getitem__(self, key):
-        return self.get(key, None)
-
-    def __setitem__(self, key, value):
-        super(DotDict, self).__setitem__(key, value)
-
-    def __delitem__(self, key):
-        super(DotDict, self).__delitem__(key)
+import config
 
 
 def set_seed(seed):
@@ -46,21 +14,21 @@ def set_seed(seed):
     torch.manual_seed(seed)
 
 
-def get_transform(mean, std):
-    return torchvision.transforms.Compose([
-        torchvision.transforms.ToTensor(),
-        torchvision.transforms.Normalize((mean,), (std,))
-    ])
-
-
-def get_data(opt, split:str, transform):
-    dataset = torchvision.datasets.MNIST(opt.datapath, train=(split=="train"), download=True, transform=transform)
-    dataloader = DataLoader(dataset, batch_size=opt.batch_size if split=="train" else 1, shuffle=(split=="train"))
-    return dataset, dataloader
-
-
 def unnorm(img, mean, std):
     return (img.squeeze() * std) + mean
+
+
+def plot_examples(dataset):
+    plt.figure(figsize=(15, 5))
+    for i in range(n:=9):
+        idx = random.randint(0, len(dataset))
+        plt.subplot(1,n,i+1)
+        img = unnorm(dataset[idx][0], config.MEAN, config.STD)
+        plt.imshow(img, cmap='gray')
+        plt.title(f"{dataset[idx][1]}")
+        plt.tight_layout()
+        plt.axis('off')
+    plt.show()
 
 
 def plot_stats(stats, savepath=None):

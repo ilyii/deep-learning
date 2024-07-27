@@ -1,0 +1,15 @@
+DATAPATH = "./data"
+SAVEPATH = "./output"
+CKPTPATH = "./output/best.pt"
+DEVICE = "cuda:0"
+SEED = 0
+NUM_EPOCHS = 10
+BATCHSIZE = 64
+LR = 0.01
+
+IN_DIM = 784
+HIDDEN_DIMS = [100]
+OUT_DIM = 10
+
+MEAN = 0.1307
+STD = 0.3081
