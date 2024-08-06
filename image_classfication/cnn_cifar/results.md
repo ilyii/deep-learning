@@ -1,5 +1,9 @@
 # CIFAR-10 Image Classification with Convolutional Neural Networks
 
+## Objectives
+1. Build a CNN image classifier.
+2. Training on CIFAR-10 dataset
+3. Evaluation
 
 ## Results
 
